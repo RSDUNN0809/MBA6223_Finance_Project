@@ -348,10 +348,11 @@ def _market_sentiment(df: pd.DataFrame) -> tuple[str, str, str]:
 # ════════════════════════════════════════════════════════════════════════════
 _fisher_banner()
 
-tab_overview, tab_industry, tab_stock = st.tabs([
+tab_overview, tab_industry, tab_stock, tab_about = st.tabs([
     "📊  Market Overview",
     "🏭  By Industry",
     "🔍  Individual Stock",
+    "ℹ️  About",
 ])
 
 
@@ -901,6 +902,214 @@ with tab_stock:
                 height=380,
                 hide_index=True,
             )
+
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │  TAB 4 — ABOUT                                                           │
+# └─────────────────────────────────────────────────────────────────────────┘
+with tab_about:
+
+    st.markdown(
+        f"<div style='font-size:22px; font-weight:800; color:{OSU_SCARLET}; margin-bottom:4px;'>"
+        "Morning 10-Minute Trading Signal Dashboard</div>"
+        f"<div style='font-size:14px; color:{OSU_GRAY}; margin-bottom:24px;'>"
+        "MBA6223 &mdash; Finance &nbsp;·&nbsp; Fisher College of Business &nbsp;·&nbsp; The Ohio State University</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── What is this dashboard? ────────────────────────────────────────────
+    st.markdown(
+        f"""
+        <div style="background:white; border-left:5px solid {OSU_SCARLET};
+                    border-radius:8px; padding:20px 24px; margin-bottom:20px;
+                    box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+            <div style="font-size:16px; font-weight:700; color:{OSU_SCARLET}; margin-bottom:10px;">
+                📌 What is this dashboard?
+            </div>
+            <p style="margin:0; line-height:1.7; color:{OSU_GRAY};">
+                This dashboard is a <strong>quantitative trading signal tool</strong> designed for the
+                opening minutes of the US equity market. Every morning, it analyses the
+                <strong>first 10 minutes of trading (09:30–09:40 AM ET)</strong> for all
+                <strong>S&amp;P 500 constituents</strong> and automatically classifies each stock as a
+                <strong>BUY</strong>, <strong>HOLD</strong>, or <strong>SELL</strong> candidate based on
+                five technical indicators.
+            </p>
+            <p style="margin:10px 0 0; line-height:1.7; color:{OSU_GRAY};">
+                The goal is to surface early-session momentum and price-action patterns that may
+                indicate short-term directional bias — helping analysts quickly identify which
+                stocks are showing strength or weakness at the open before the broader market
+                narrative is fully established.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Where does the data come from? ────────────────────────────────────
+    st.markdown(
+        f"""
+        <div style="background:white; border-left:5px solid {OSU_SCARLET};
+                    border-radius:8px; padding:20px 24px; margin-bottom:20px;
+                    box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+            <div style="font-size:16px; font-weight:700; color:{OSU_SCARLET}; margin-bottom:10px;">
+                📡 Where does the data come from?
+            </div>
+            <table style="width:100%; border-collapse:collapse; font-size:14px; color:{OSU_GRAY};">
+              <tr>
+                <td style="padding:8px 12px; font-weight:600; width:200px; vertical-align:top;">Data source</td>
+                <td style="padding:8px 12px;">
+                  <strong>Yahoo Finance</strong> via the open-source <code>yfinance</code> Python library.
+                  Data is free and carries an approximate 1-minute delay.
+                </td>
+              </tr>
+              <tr style="background:#fafafa;">
+                <td style="padding:8px 12px; font-weight:600; vertical-align:top;">Stock universe</td>
+                <td style="padding:8px 12px;">
+                  All <strong>S&amp;P 500 constituents</strong> (~500 stocks), scraped live from Wikipedia's
+                  S&amp;P 500 list. A 20-stock fallback list is used if the scrape fails.
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:8px 12px; font-weight:600; vertical-align:top;">Intraday bars</td>
+                <td style="padding:8px 12px;">
+                  <strong>1-minute OHLCV bars</strong> for today's session, fetched in batches of 200 tickers.
+                  The first 10 bars at or after 09:30 AM ET are extracted for analysis.
+                </td>
+              </tr>
+              <tr style="background:#fafafa;">
+                <td style="padding:8px 12px; font-weight:600; vertical-align:top;">Daily reference data</td>
+                <td style="padding:8px 12px;">
+                  <strong>30-day daily bars</strong> are fetched to derive each stock's
+                  <em>previous session close</em> (for the gap calculation) and
+                  <em>average daily volume</em> (for the volume ratio baseline).
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:8px 12px; font-weight:600; vertical-align:top;">Refresh cadence</td>
+                <td style="padding:8px 12px;">
+                  Results are <strong>cached for 5 minutes</strong>. Click <em>Refresh Data</em> in the
+                  sidebar to force a new fetch at any time.
+                </td>
+              </tr>
+              <tr style="background:#fafafa;">
+                <td style="padding:8px 12px; font-weight:600; vertical-align:top;">Price adjustment</td>
+                <td style="padding:8px 12px;">
+                  All prices use <strong>split-adjusted closes</strong> (<code>auto_adjust=True</code>)
+                  to avoid distortions from stock splits.
+                </td>
+              </tr>
+            </table>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Signal logic ───────────────────────────────────────────────────────
+    st.markdown(
+        f"""
+        <div style="background:white; border-left:5px solid {OSU_SCARLET};
+                    border-radius:8px; padding:20px 24px; margin-bottom:20px;
+                    box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+            <div style="font-size:16px; font-weight:700; color:{OSU_SCARLET}; margin-bottom:10px;">
+                ⚙️ How are BUY / HOLD / SELL signals generated?
+            </div>
+            <p style="margin:0 0 14px; line-height:1.7; color:{OSU_GRAY};">
+                Each stock is scored by <strong>five independent technical indicators</strong>.
+                Every indicator casts a <strong>vote</strong> of <strong>+1 (bullish)</strong>,
+                <strong>0 (neutral)</strong>, or <strong>−1 (bearish)</strong>.
+                The votes are summed to produce an <strong>aggregate score</strong> ranging from −5 to +5.
+            </p>
+            <table style="width:100%; border-collapse:collapse; font-size:14px;">
+              <thead>
+                <tr style="background:{OSU_SCARLET}; color:white;">
+                  <th style="padding:10px 14px; text-align:left;">#</th>
+                  <th style="padding:10px 14px; text-align:left;">Indicator</th>
+                  <th style="padding:10px 14px; text-align:left;">What it measures</th>
+                  <th style="padding:10px 14px; text-align:left;">Bullish (+1)</th>
+                  <th style="padding:10px 14px; text-align:left;">Bearish (−1)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="background:white;">
+                  <td style="padding:10px 14px; color:{OSU_LIGHTGRAY};">1</td>
+                  <td style="padding:10px 14px; font-weight:600;">Gap vs Prior Close</td>
+                  <td style="padding:10px 14px; color:{OSU_GRAY};">How far the open price jumped above or below yesterday's close</td>
+                  <td style="padding:10px 14px; color:#155724;">Open ≥ +1%</td>
+                  <td style="padding:10px 14px; color:#721c24;">Open ≤ −1%</td>
+                </tr>
+                <tr style="background:#fafafa;">
+                  <td style="padding:10px 14px; color:{OSU_LIGHTGRAY};">2</td>
+                  <td style="padding:10px 14px; font-weight:600;">10-Min Momentum</td>
+                  <td style="padding:10px 14px; color:{OSU_GRAY};">Price return from the first bar's open to the 10th minute's close</td>
+                  <td style="padding:10px 14px; color:#155724;">Return ≥ +0.3%</td>
+                  <td style="padding:10px 14px; color:#721c24;">Return ≤ −0.3%</td>
+                </tr>
+                <tr style="background:white;">
+                  <td style="padding:10px 14px; color:{OSU_LIGHTGRAY};">3</td>
+                  <td style="padding:10px 14px; font-weight:600;">VWAP Position</td>
+                  <td style="padding:10px 14px; color:{OSU_GRAY};">Whether the last price is trading above or below the session's VWAP<br>
+                    <span style="font-size:12px;">VWAP = Σ(typical price × volume) / Σ(volume)</span></td>
+                  <td style="padding:10px 14px; color:#155724;">Price ≥ VWAP +0.1%</td>
+                  <td style="padding:10px 14px; color:#721c24;">Price ≤ VWAP −0.1%</td>
+                </tr>
+                <tr style="background:#fafafa;">
+                  <td style="padding:10px 14px; color:{OSU_LIGHTGRAY};">4</td>
+                  <td style="padding:10px 14px; font-weight:600;">Volume vs Expected</td>
+                  <td style="padding:10px 14px; color:{OSU_GRAY};">Compares first-10-min volume to the expected open-period baseline<br>
+                    <span style="font-size:12px;">Baseline = avg daily volume × (10/390) × 1.5</span></td>
+                  <td style="padding:10px 14px; color:#155724;">Vol ratio ≥ 1.5× (confirms momentum direction)</td>
+                  <td style="padding:10px 14px; color:#721c24;">Vol ratio ≤ 0.5× → neutral (no confirmation)</td>
+                </tr>
+                <tr style="background:white;">
+                  <td style="padding:10px 14px; color:{OSU_LIGHTGRAY};">5</td>
+                  <td style="padding:10px 14px; font-weight:600;">Last-5-Bar Trend</td>
+                  <td style="padding:10px 14px; color:{OSU_GRAY};">Counts how many of the final 5 one-minute candles closed higher than they opened</td>
+                  <td style="padding:10px 14px; color:#155724;">≥ 4 of 5 bars bullish</td>
+                  <td style="padding:10px 14px; color:#721c24;">≥ 4 of 5 bars bearish</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <!-- Score → Signal mapping -->
+            <div style="margin-top:20px; display:flex; gap:16px; flex-wrap:wrap;">
+                <div style="flex:1; min-width:160px; background:{SIG_BUY_BG}; color:white;
+                            border-radius:10px; padding:16px 20px; text-align:center;">
+                    <div style="font-size:28px; font-weight:900;">🟢 BUY</div>
+                    <div style="font-size:15px; margin-top:6px;">Score ≥ <strong>+2</strong></div>
+                    <div style="font-size:12px; opacity:0.85; margin-top:4px;">
+                        At least 3 of 5 indicators are net bullish
+                    </div>
+                </div>
+                <div style="flex:1; min-width:160px; background:{SIG_HOLD_BG}; color:white;
+                            border-radius:10px; padding:16px 20px; text-align:center;">
+                    <div style="font-size:28px; font-weight:900;">🟡 HOLD</div>
+                    <div style="font-size:15px; margin-top:6px;">Score −1 to <strong>+1</strong></div>
+                    <div style="font-size:12px; opacity:0.85; margin-top:4px;">
+                        Mixed or insufficient signal strength
+                    </div>
+                </div>
+                <div style="flex:1; min-width:160px; background:{SIG_SELL_BG}; color:white;
+                            border-radius:10px; padding:16px 20px; text-align:center;">
+                    <div style="font-size:28px; font-weight:900;">🔴 SELL</div>
+                    <div style="font-size:15px; margin-top:6px;">Score ≤ <strong>−2</strong></div>
+                    <div style="font-size:12px; opacity:0.85; margin-top:4px;">
+                        At least 3 of 5 indicators are net bearish
+                    </div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Disclaimer ─────────────────────────────────────────────────────────
+    st.info(
+        "**Disclaimer:** Signals are generated from short-term technical indicators over a "
+        "10-minute window and are intended for educational purposes only. They do not "
+        "constitute financial advice, investment recommendations, or a guarantee of future "
+        "performance. Always conduct your own research before making investment decisions.",
+        icon="⚠️",
+    )
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
