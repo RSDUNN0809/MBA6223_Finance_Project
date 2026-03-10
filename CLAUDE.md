@@ -1,16 +1,22 @@
 # CLAUDE.md — AI Assistant Guide for MBA6223 Finance Project
 
-This file provides context, conventions, and workflows for AI coding assistants (Claude Code and similar tools) working in this repository.
+This file provides context, conventions, and workflows for AI coding assistants
+(Claude Code and similar tools) working in this repository.
 
 ---
 
 ## Project Overview
 
 **Course**: MBA6223 — Finance (Graduate-level)
-**Repository**: MBA6223_Finance_Project
-**Status**: Initial setup — project files are being added.
+**Application**: Morning 10-Minute Trading Signal Dashboard
+**Language**: Python 3.11+
+**UI**: Streamlit web app
+**Data**: Yahoo Finance via `yfinance` (free, ~1-min delay)
 
-This project is an MBA-level finance coursework repository. It likely involves one or more of the following domains: financial modeling, portfolio analysis, valuation, risk management, quantitative methods, or data-driven finance. Update this section with the specific project description once defined.
+Every morning the application fetches the first 10 minutes of trading data
+(09:30–09:40 AM ET) for all S&P 500 constituents, scores each stock across
+five technical indicators, and displays a colour-coded BUY / SELL / HOLD
+signal table in the browser.
 
 ---
 
@@ -18,166 +24,176 @@ This project is an MBA-level finance coursework repository. It likely involves o
 
 ```
 MBA6223_Finance_Project/
-├── CLAUDE.md            # This file — AI assistant guide
-├── README.md            # Project overview (add when project is scoped)
-├── data/                # Raw and processed financial datasets
-├── notebooks/           # Jupyter notebooks for analysis
-├── src/                 # Source code / scripts
-├── reports/             # Generated reports, charts, outputs
-├── tests/               # Unit and integration tests
-└── requirements.txt     # Python dependencies (if Python-based)
+├── app.py               # Streamlit dashboard — entry point
+├── requirements.txt     # Python dependencies
+├── CLAUDE.md            # This file
+└── src/
+    ├── __init__.py
+    ├── universe.py      # S&P 500 ticker list (Wikipedia → fallback)
+    ├── data.py          # Intraday & daily data fetching (yfinance)
+    └── signals.py       # Signal engine: indicators → BUY/SELL/HOLD
 ```
 
-> **Note**: This structure is a recommended convention. Update this section as the actual directory structure is established.
-
 ---
 
-## Technology Stack
+## Getting Started
 
-The project is not yet populated. Common stacks for MBA finance projects include:
-
-### Python (most likely)
-- **Data analysis**: `pandas`, `numpy`
-- **Finance-specific**: `yfinance`, `quantlib`, `pyfolio`, `empyrical`, `zipline`
-- **Visualization**: `matplotlib`, `seaborn`, `plotly`
-- **Statistical modeling**: `statsmodels`, `scipy`
-- **Machine learning (optional)**: `scikit-learn`
-- **Notebooks**: `jupyter`
-
-### R (alternative)
-- `tidyverse`, `quantmod`, `PerformanceAnalytics`, `TTR`
-
-Update this section once the actual stack is committed to the repository.
-
----
-
-## Development Setup
-
-### Initial Setup (Python)
 ```bash
 # Create and activate a virtual environment
 python -m venv venv
-source venv/bin/activate        # Linux/macOS
+source venv/bin/activate        # macOS/Linux
 # venv\Scripts\activate         # Windows
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Launch Jupyter notebooks (if applicable)
-jupyter notebook
+# Launch the dashboard
+streamlit run app.py
 ```
 
-### Initial Setup (R)
-```r
-# Install required packages
-install.packages(c("tidyverse", "quantmod", "PerformanceAnalytics"))
-```
-
-> Update this section once `requirements.txt` or equivalent dependency files exist.
+The app opens at http://localhost:8501.  Click **Refresh Data** in the sidebar
+to trigger a new fetch.
 
 ---
 
-## Running Tests
+## Module Reference
 
-Once tests are added:
-```bash
-# Python (pytest)
-pytest tests/
+### `src/universe.py`
 
-# With coverage
-pytest --cov=src tests/
-```
+| Symbol | Description |
+|--------|-------------|
+| `get_sp500() -> pd.DataFrame` | Returns a DataFrame with columns `ticker`, `company`, `sector`. Scrapes Wikipedia; falls back to 20-stock hardcoded list on network failure. |
+
+### `src/data.py`
+
+| Symbol | Description |
+|--------|-------------|
+| `market_status() -> str` | Returns `"pre"`, `"open"`, or `"closed"` based on current ET time. |
+| `get_intraday_bars(tickers, batch_size=200) -> dict[str, DataFrame]` | Batch-downloads 1-min bars for today via `yf.download()`. Falls back to parallel single-ticker fetches (20 threads) if the batch fails. |
+| `get_daily_info(tickers, batch_size=200) -> dict[str, dict]` | Fetches 30-day daily bars; returns `prev_close` and `avg_volume` per ticker. |
+| `extract_first_10_min(bars) -> DataFrame \| None` | Slices `bars` to the first 10 rows at or after 09:30 AM ET. |
+
+### `src/signals.py`
+
+| Symbol | Description |
+|--------|-------------|
+| `compute_signal(bars_10, prev_close, avg_daily_volume) -> dict` | Scores a single ticker. Returns `signal`, `score`, `votes`, `details`. |
+| `assess_all(intraday_data, daily_info, universe) -> DataFrame` | Runs `compute_signal` for every ticker; returns tidy sorted DataFrame. |
+| `BUY`, `SELL`, `HOLD` | String constants for signal values. |
+
+### `app.py`
+
+Streamlit entry point. Responsibilities:
+- Sidebar: refresh button, signal filter, sector filter, methodology legend
+- Cached `run_full_analysis()` (`ttl=300 s`) that calls `get_sp500 → get_intraday_bars → get_daily_info → assess_all`
+- Summary metrics (BUY / SELL / HOLD counts)
+- Plotly charts: signal pie, sector bar, score histogram
+- Styled `st.dataframe` with colour-coded Signal and Score columns
+- CSV download button
+
+---
+
+## Signal Logic
+
+Five indicators each vote **+1** (bullish), **0** (neutral), or **−1** (bearish).
+
+| # | Indicator | Bullish (+1) | Bearish (−1) |
+|---|-----------|-------------|-------------|
+| 1 | **Gap** | Open ≥ +1 % vs prev close | Open ≤ −1 % |
+| 2 | **Momentum** | 10-min return ≥ +0.3 % | 10-min return ≤ −0.3 % |
+| 3 | **VWAP** | Last price ≥ VWAP +0.1 % | Last price ≤ VWAP −0.1 % |
+| 4 | **Volume** | Vol ratio ≥ 1.5× (confirms momentum dir) | Vol ratio ≤ 0.5× → neutral |
+| 5 | **Trend** | ≥ 4 of last 5 bars close > open | ≥ 4 of last 5 bars close < open |
+
+**Aggregate score**: sum of votes ∈ [−5, +5]
+- Score ≥ **+2** → `BUY`
+- Score ≤ **−2** → `SELL`
+- Otherwise → `HOLD`
+
+VWAP is computed as the cumulative volume-weighted average price over the
+first-10-minute window: `VWAP = Σ(typical_price × volume) / Σ(volume)` where
+`typical_price = (High + Low + Close) / 3`.
+
+---
+
+## Development Conventions
+
+### General
+- **Read files before editing** — never modify a file you haven't read.
+- **Minimal scope** — only change what is necessary for the task.
+- **No speculative features** — don't add error handling or abstractions not
+  explicitly requested.
+
+### Python Style
+- Follow PEP 8. Use type hints on all function signatures.
+- Prefer vectorised pandas/numpy operations over Python loops.
+- Named constants for thresholds (e.g. `_BUY_THRESHOLD = 2`).
+- Finance variable names must be self-documenting:
+  `risk_free_rate` not `r`, `gap_pct` not `g`, `prev_close` not `pc`.
+
+### Streamlit
+- Keep all Streamlit calls in `app.py`; keep `src/` free of `import streamlit`.
+- Use `@st.cache_data(ttl=...)` for expensive fetches. Clear with
+  `st.cache_data.clear()` on manual refresh.
+- Do **not** call `st.progress` or other widget functions inside cached
+  functions — they will not render correctly.
+
+### Data
+- Raw data comes from Yahoo Finance; do not hard-code prices or returns.
+- Log warnings (not exceptions) when a single ticker fails — the app should
+  always complete even if some tickers have missing data.
+- `None` / `NaN` in the output table is acceptable and is rendered as `—` in
+  the dashboard.
+
+### Financial Accuracy
+- VWAP formula: `Σ(typical × volume) / Σ(volume)` — do not use simple average.
+- Volume expected baseline: `avg_daily_volume × (10/390) × 1.5` (open premium).
+- Do not conflate adjusted and unadjusted prices. `auto_adjust=True` is used
+  throughout to return split-adjusted closes.
 
 ---
 
 ## Git Workflow
 
-### Branch Strategy
-- `main` — stable, reviewed code only
-- `claude/<session-id>` — AI-generated branches (auto-created per Claude Code session)
-- `feature/<description>` — human-authored feature branches
-
-### Commit Conventions
-Use clear, descriptive commit messages:
-```
-Add DCF valuation model for Project A
-Fix CAPM beta calculation in portfolio module
-Update data pipeline to pull from Yahoo Finance API
-```
-
-- Use present tense imperative style ("Add", "Fix", "Update")
-- Reference data sources or model names where relevant
-- Keep commits focused on a single logical change
-
-### Pushing Changes
 ```bash
-git push -u origin <branch-name>
+git push -u origin <branch>
+```
+
+Branch naming:
+- `main` — stable only
+- `claude/<session-id>` — AI-generated branches
+- `feature/<description>` — human-authored features
+
+Commit style: imperative, present tense, descriptive.
+
+```
+Add RSI indicator to morning signal engine
+Fix VWAP calculation when volume is zero
+Update sector bar chart to use stacked mode
 ```
 
 ---
 
-## Key Conventions for AI Assistants
+## Running Tests
 
-### General Principles
-1. **Read before editing** — Always read existing files before modifying them.
-2. **Minimal changes** — Only modify what is necessary for the task. Do not refactor unrelated code.
-3. **No speculative features** — Do not add error handling, abstractions, or functionality not explicitly requested.
-4. **Finance domain accuracy** — Verify that financial formulas, rates, and calculations are correct. Cite sources (e.g., CFA curriculum, textbook chapter) when implementing standard models.
-5. **Data provenance** — Always document where financial data comes from (ticker, API, date range, source).
+No tests exist yet. When adding tests, use `pytest`:
 
-### Financial Modeling Conventions
-- Use descriptive variable names that reflect financial concepts (`risk_free_rate`, `beta`, `market_premium`, not `r`, `b`, `mp`)
-- Store magic numbers (e.g., trading days per year = 252, risk-free rate) as named constants
-- Include units in variable names or comments where ambiguous (e.g., `price_usd`, `return_pct`)
-- Clearly separate raw data, intermediate calculations, and final outputs
-
-### Notebooks
-- Each notebook should have a clear title cell and purpose statement
-- Use markdown cells to explain methodology and assumptions
-- Restart kernel and run all cells before committing (`Kernel > Restart & Run All`)
-- Do not commit notebooks with large embedded data outputs — clear outputs before committing if output files are large
-
-### Data Files
-- Raw data belongs in `data/raw/` and should not be modified
-- Processed/cleaned data belongs in `data/processed/`
-- Do not commit large binary data files (>10MB) — use `.gitignore` or external storage
-- Document data sources and retrieval dates in a `data/README.md` or inline comments
-
-### Python Style
-- Follow PEP 8 conventions
-- Use type hints for function signatures where practical
-- Keep functions focused and single-purpose
-- Prefer `pandas` vectorized operations over Python loops for performance
-
----
-
-## Common Tasks
-
-### Adding a New Analysis
-1. Create a new notebook in `notebooks/` or a script in `src/`
-2. Document the financial question being answered at the top
-3. State assumptions clearly (risk-free rate used, time period, etc.)
-4. Validate results against known benchmarks where possible
-
-### Updating Dependencies
 ```bash
-pip freeze > requirements.txt
+pytest tests/ -v
+pytest --cov=src tests/
 ```
 
-### Working with Financial Data
-```python
-import yfinance as yf
-
-# Download historical prices
-ticker = yf.Ticker("AAPL")
-hist = ticker.history(period="5y")
-```
+Unit test `compute_signal` with synthetic bar DataFrames; do not make live
+network calls in tests (mock `yfinance` calls with `pytest-mock`).
 
 ---
 
-## Important Notes for AI Assistants
+## Key Files At-a-Glance
 
-- **This repository was analyzed on 2026-03-10** and contained no source files at that time. All structural recommendations above are conventions — verify against actual file contents before making changes.
-- **Always check the actual directory structure** before assuming the layout described above is in place.
-- **Finance calculations are high-stakes** in an academic context — double-check formulas and cite methodology.
-- **Do not hallucinate data** — if financial data is needed, use real APIs (Yahoo Finance, FRED, etc.) or clearly label data as synthetic/example-only.
+| File | Edit when you want to… |
+|------|------------------------|
+| `src/universe.py` | Change the stock universe or fallback list |
+| `src/data.py` | Change data source, batch size, or timezone handling |
+| `src/signals.py` | Add/remove indicators, change thresholds, adjust scoring |
+| `app.py` | Change dashboard layout, filters, charts, or caching TTL |
+| `requirements.txt` | Add/remove Python dependencies |
