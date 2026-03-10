@@ -1,0 +1,7 @@
+[theme]
+# Ohio State University brand colors
+primaryColor        = "#BB0000"   # OSU Scarlet
+backgroundColor     = "#FAFAFA"
+secondaryBackgroundColor = "#F0ECEC"   # faint scarlet tint on sidebar/cards
+textColor           = "#1A1A1A"
+font                = "sans serif"
