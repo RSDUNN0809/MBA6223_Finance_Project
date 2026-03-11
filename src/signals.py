@@ -1,7 +1,7 @@
 """
 signals.py — Morning 10-minute signal engine.
 
-Five independent indicators each cast a directional vote:
+Six independent indicators each cast a directional vote:
   +1 = bullish,  0 = neutral,  -1 = bearish
 
 Aggregate score:
@@ -16,6 +16,7 @@ Indicators
 3. VWAP          — last price vs. cumulative VWAP  (threshold: ±0.1 %)
 4. Volume        — first-10-min volume vs. expected (threshold: 1.5×/0.5×)
 5. Trend         — bar-by-bar direction of last 5 candles (≥ 4 of 5 same way)
+6. Search Trend  — Google Trends 3-month interest scored by ML model (optional)
 """
 from __future__ import annotations
 
@@ -59,6 +60,7 @@ def compute_signal(
     bars_10: Optional[pd.DataFrame],
     prev_close: Optional[float] = None,
     avg_daily_volume: Optional[float] = None,
+    trend_vote: int = 0,
 ) -> dict:
     """
     Compute the BUY / SELL / HOLD signal from the first 10 minutes of trading.
@@ -71,13 +73,16 @@ def compute_signal(
         Adjusted closing price of the previous session (used for gap calc).
     avg_daily_volume : float | None
         30-day mean daily volume (used for volume anomaly detection).
+    trend_vote : int
+        ML-derived Google Trends directional vote (+1 / 0 / -1).
+        Defaults to 0 (neutral) when trends data is unavailable.
 
     Returns
     -------
     dict with keys:
         signal   — "BUY" | "SELL" | "HOLD"
-        score    — int in [-5, +5]
-        votes    — dict of per-indicator votes
+        score    — int in [-6, +6]
+        votes    — dict of per-indicator votes (includes "search_trend")
         details  — dict of human-readable computed values
     """
     if bars_10 is None or bars_10.empty:
@@ -179,6 +184,11 @@ def compute_signal(
         details["trend_up_bars"] = None
         details["trend_dn_bars"] = None
         votes["trend"] = 0
+
+    # ── 6. Search Trend (ML) ──────────────────────────────────────────────────
+    # trend_vote is pre-computed by ml_model.TrendSignalModel from Google
+    # Trends features.  Defaults to 0 when trends data is not yet available.
+    votes["search_trend"] = int(trend_vote)
 
     # ── Aggregate ─────────────────────────────────────────────────────────────
     total_score = sum(votes.values())

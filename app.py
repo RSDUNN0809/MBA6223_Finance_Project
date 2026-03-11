@@ -27,7 +27,9 @@ from src.data import (
     get_intraday_bars,
     market_status,
 )
+from src.ml_model import get_model
 from src.signals import BUY, HOLD, SELL, assess_all, compute_signal
+from src.trends import compute_trend_features, fetch_trends, get_price_history_3m
 from src.universe import get_sp500
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -185,6 +187,33 @@ def run_full_analysis() -> pd.DataFrame:
     intraday = get_intraday_bars(tickers)
     daily    = get_daily_info(tickers)
     return assess_all(intraday, daily, universe)
+
+
+@st.cache_data(ttl=21_600, show_spinner=False)   # 6-hour cache — trends are slow to fetch
+def fetch_trend_data(ticker: str) -> dict:
+    """
+    Fetch Google Trends + 3-month price history for *ticker*.
+
+    Returns
+    -------
+    dict with keys:
+        trends_series  : pd.Series | None   (weekly interest 0-100, ~13 pts)
+        price_history  : pd.DataFrame | None (daily OHLCV, ~63 rows)
+        features       : dict               (level_ratio, slope_4w, …)
+        vote           : int                (+1 / 0 / -1 from ML model)
+        model_trained  : bool
+    """
+    trends_series = fetch_trends(ticker)
+    price_history = get_price_history_3m(ticker)
+    features      = compute_trend_features(trends_series)
+    vote          = get_model().predict_vote(features)
+    return {
+        "trends_series": trends_series,
+        "price_history": price_history,
+        "features":      features,
+        "vote":          vote,
+        "model_trained": get_model().is_trained,
+    }
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -722,9 +751,26 @@ with tab_stock:
     with st.spinner(f"Loading detail for {selected_ticker}…"):
         detail = fetch_stock_detail(selected_ticker)
 
-    full_result = detail["result"]
-    bars_10     = detail["bars_10"]
-    votes       = full_result.get("votes", {})
+    # ── Fetch Google Trends + ML vote (cached 6 h) ────────────────────────
+    with st.spinner(f"Fetching Google Trends for {selected_ticker}…"):
+        trend_data = fetch_trend_data(selected_ticker)
+
+    trend_vote     = trend_data.get("vote", 0)
+    trend_features = trend_data.get("features", {})
+    trends_series  = trend_data.get("trends_series")
+    price_hist_3m  = trend_data.get("price_history")
+
+    # Recompute signal including the trend vote as 6th indicator
+    _d_info  = detail["daily"]
+    full_result = compute_signal(
+        detail["bars_10"],
+        prev_close=_d_info.get("prev_close"),
+        avg_daily_volume=_d_info.get("avg_volume"),
+        trend_vote=trend_vote,
+    )
+
+    bars_10 = detail["bars_10"]
+    votes   = full_result.get("votes", {})
     dets        = full_result.get("details", {})
 
     # ── Indicator scorecard ───────────────────────────────────────────────
@@ -749,6 +795,11 @@ with tab_stock:
         except (TypeError, ValueError):
             return str(x)
 
+    _trend_level = trend_features.get("current_level", 50.0)
+    _trend_slope = trend_features.get("slope_4w", 0.0)
+    _trend_model_label = "ML (trained)" if trend_data.get("model_trained") else "Rule-based"
+    _trends_available = trends_series is not None
+
     indicators = [
         ("Gap vs Prior Close",
          f"{_val(dets.get('gap_pct'), '+.2f')}%",
@@ -770,6 +821,10 @@ with tab_stock:
          f"{dets.get('trend_up_bars', '—')}↑ / {dets.get('trend_dn_bars', '—')}↓",
          "Count of bullish vs bearish candles in the final 5 bars. ≥4 same direction triggers a vote.",
          votes.get("trend", 0)),
+        ("Search Trend (ML)",
+         f"Interest: {_val(_trend_level, '.0f')}/100 · Slope: {_val(_trend_slope, '+.3f')}" if _trends_available else "No data",
+         f"Google Trends 3-month US search interest. Scored by {_trend_model_label} model. Rising above-average interest is bullish.",
+         votes.get("search_trend", 0)),
     ]
 
     scorecard_html = f"""
@@ -796,21 +851,25 @@ with tab_stock:
           <td style="padding:10px 14px; color:{OSU_GRAY}; font-size:13px;">{interp}</td>
         </tr>
         """
-    total_score = full_result.get("score", 0)
+    total_score     = full_result.get("score", 0)
+    updated_signal  = full_result.get("signal", quick_signal)
+    updated_badge   = {BUY: SIG_BUY_BG, SELL: SIG_SELL_BG, HOLD: SIG_HOLD_BG}.get(updated_signal, OSU_GRAY)
     scorecard_html += f"""
       </tbody>
       <tfoot>
         <tr style="background:#f0ecec; border-top:2px solid {OSU_SCARLET};">
           <td colspan="3" style="padding:12px 14px; font-weight:700; font-size:15px;">
-            Total Score
+            Total Score (incl. Search Trend)
           </td>
           <td style="padding:12px 14px;">
-            <span style="background:{badge_color}; color:white; padding:4px 16px;
+            <span style="background:{updated_badge}; color:white; padding:4px 16px;
                          border-radius:6px; font-weight:700; font-size:15px;">
-              {'+' if total_score > 0 else ''}{total_score} → {quick_signal}
+              {'+' if total_score > 0 else ''}{total_score} → {updated_signal}
             </span>
           </td>
-          <td></td>
+          <td style="padding:12px 14px; color:{OSU_GRAY}; font-size:12px;">
+            Score range: −6 to +6 &nbsp;·&nbsp; BUY ≥ +2 · SELL ≤ −2
+          </td>
         </tr>
       </tfoot>
     </table>
@@ -887,6 +946,113 @@ with tab_stock:
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info(f"No intraday bar data available for {selected_ticker}. This is normal outside market hours.")
+
+    # ── Google Trends + 3-month price chart ───────────────────────────────
+    st.markdown(
+        f"<div style='font-size:17px; font-weight:700; color:{OSU_SCARLET}; "
+        "margin-bottom:4px; margin-top:8px;'>Google Trends vs. Stock Price — Past 3 Months</div>"
+        f"<div style='font-size:12px; color:{OSU_LIGHTGRAY}; margin-bottom:10px;'>"
+        "Search interest (0-100, left axis) reflects US Google searches for the ticker symbol. "
+        "Price (right axis) shows the adjusted closing price over the same window.</div>",
+        unsafe_allow_html=True,
+    )
+
+    if trends_series is not None and price_hist_3m is not None and not price_hist_3m.empty:
+        fig_trends = go.Figure()
+
+        # ── Trends filled-area (Google-style) ──────────────────────────────
+        fig_trends.add_trace(go.Scatter(
+            x=trends_series.index,
+            y=trends_series.values,
+            name="Search Interest",
+            fill="tozeroy",
+            fillcolor="rgba(66, 133, 244, 0.15)",   # Google-blue tint
+            line=dict(color="rgba(66, 133, 244, 0.8)", width=2),
+            mode="lines",
+            yaxis="y1",
+            hovertemplate="<b>%{x|%b %d %Y}</b><br>Search Interest: %{y:.0f}/100<extra></extra>",
+        ))
+
+        # ── Stock closing price (scarlet line, right axis) ──────────────────
+        # Flatten multi-level columns if present (yfinance sometimes returns them)
+        _ph = price_hist_3m.copy()
+        if isinstance(_ph.columns, pd.MultiIndex):
+            _ph.columns = _ph.columns.get_level_values(0)
+
+        if "Close" in _ph.columns:
+            fig_trends.add_trace(go.Scatter(
+                x=_ph.index,
+                y=_ph["Close"],
+                name="Closing Price",
+                line=dict(color=OSU_SCARLET, width=2.5),
+                mode="lines",
+                yaxis="y2",
+                hovertemplate="<b>%{x|%b %d %Y}</b><br>Price: $%{y:.2f}<extra></extra>",
+            ))
+
+        fig_trends.update_layout(
+            title=f"<b>{selected_ticker}</b> — Google Trends Interest vs. Closing Price (3 months)",
+            title_font=dict(size=14, color=OSU_GRAY),
+            xaxis=dict(title="Date", showgrid=True, gridcolor="#f0f0f0"),
+            yaxis=dict(
+                title="Search Interest (0–100)",
+                range=[0, 110],
+                showgrid=True,
+                gridcolor="#f0f0f0",
+                tickfont=dict(color="rgba(66, 133, 244, 0.9)"),
+                titlefont=dict(color="rgba(66, 133, 244, 0.9)"),
+            ),
+            yaxis2=dict(
+                title="Price ($)",
+                overlaying="y",
+                side="right",
+                showgrid=False,
+                tickfont=dict(color=OSU_SCARLET),
+                titlefont=dict(color=OSU_SCARLET),
+            ),
+            legend=dict(orientation="h", y=-0.15),
+            height=360,
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            hovermode="x unified",
+        )
+
+        # ── Trend annotation ───────────────────────────────────────────────
+        _vote_labels = {1: "↑ Bullish", 0: "→ Neutral", -1: "↓ Bearish"}
+        _vote_colors = {1: SIG_BUY_BG, 0: SIG_HOLD_BG, -1: SIG_SELL_BG}
+        st.plotly_chart(fig_trends, use_container_width=True)
+
+        # Feature summary chips
+        feat_col1, feat_col2, feat_col3, feat_col4 = st.columns(4)
+        feat_col1.metric(
+            "Current Interest",
+            f"{trend_features.get('current_level', 0):.0f} / 100",
+            help="Latest weekly search interest (0=low, 100=peak popularity)",
+        )
+        feat_col2.metric(
+            "vs 3-Month Avg",
+            f"{trend_features.get('level_ratio', 1):.2f}×",
+            delta=f"{(trend_features.get('level_ratio', 1) - 1) * 100:+.0f}%",
+            help="Current interest relative to the 3-month mean. >1× = above average.",
+        )
+        feat_col3.metric(
+            "4-Week Slope",
+            f"{trend_features.get('slope_4w', 0):+.3f}",
+            help="Normalised OLS slope of search interest over the past 4 weeks. Positive = rising.",
+        )
+        feat_col4.metric(
+            "ML Signal Vote",
+            f"{_vote_labels.get(trend_vote, '—')}",
+            help=f"{'Trained logistic regression' if trend_data.get('model_trained') else 'Rule-based scorer'} applied to the three trend features above.",
+        )
+
+    elif trends_series is None:
+        st.info(
+            "Google Trends data could not be fetched for this ticker. "
+            "This may be due to API rate limits — try again in a moment. "
+            "The Search Trend vote defaults to neutral (0).",
+            icon="📡",
+        )
 
     # ── Context: same-sector peers ─────────────────────────────────────────
     if quick_sector and quick_sector != "—":
@@ -1014,10 +1180,13 @@ with tab_about:
                 ⚙️ How are BUY / HOLD / SELL signals generated?
             </div>
             <p style="margin:0 0 14px; line-height:1.7; color:{OSU_GRAY};">
-                Each stock is scored by <strong>five independent technical indicators</strong>.
-                Every indicator casts a <strong>vote</strong> of <strong>+1 (bullish)</strong>,
-                <strong>0 (neutral)</strong>, or <strong>−1 (bearish)</strong>.
-                The votes are summed to produce an <strong>aggregate score</strong> ranging from −5 to +5.
+                Each stock is scored by <strong>six independent indicators</strong> — five
+                technical and one ML-powered. Every indicator casts a <strong>vote</strong>
+                of <strong>+1 (bullish)</strong>, <strong>0 (neutral)</strong>, or
+                <strong>−1 (bearish)</strong>. The votes are summed to produce an
+                <strong>aggregate score</strong> ranging from −6 to +6.
+                The 6th indicator (Search Trend) is available in the
+                <em>Individual Stock</em> tab; it defaults to 0 for the batch table.
             </p>
             <table style="width:100%; border-collapse:collapse; font-size:14px;">
               <thead>
@@ -1066,6 +1235,14 @@ with tab_about:
                   <td style="padding:10px 14px; color:{OSU_GRAY};">Counts how many of the final 5 one-minute candles closed higher than they opened</td>
                   <td style="padding:10px 14px; color:#155724;">≥ 4 of 5 bars bullish</td>
                   <td style="padding:10px 14px; color:#721c24;">≥ 4 of 5 bars bearish</td>
+                </tr>
+                <tr style="background:#fafafa;">
+                  <td style="padding:10px 14px; color:{OSU_LIGHTGRAY};">6</td>
+                  <td style="padding:10px 14px; font-weight:600;">Search Trend <span style="font-size:11px; background:#1a3a6b; color:white; border-radius:4px; padding:1px 6px; margin-left:4px;">ML</span></td>
+                  <td style="padding:10px 14px; color:{OSU_GRAY};">Google Trends 3-month US search interest for the ticker, scored by a logistic regression model trained on trend features vs. historical price returns.<br>
+                    <span style="font-size:12px;">Features: interest level vs. 3m avg · 4-week OLS slope · 2-week acceleration</span></td>
+                  <td style="padding:10px 14px; color:#155724;">Rising, above-average interest</td>
+                  <td style="padding:10px 14px; color:#721c24;">Falling, below-average interest</td>
                 </tr>
               </tbody>
             </table>
