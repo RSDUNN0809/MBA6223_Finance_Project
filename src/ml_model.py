@@ -121,12 +121,54 @@ class TrendSignalModel:
             return int(self._pipeline.predict(row)[0])
         return _rule_based_vote(features)
 
+    def predict_proba(self, features: dict) -> dict[int, float]:
+        """
+        Return probability estimates for each class.
+
+        Returns
+        -------
+        dict mapping class label → probability, e.g.
+            {1: 0.72, 0: 0.18, -1: 0.10}
+        """
+        if self._trained and self._pipeline is not None:
+            row    = np.array([[features.get(c, 0.0) for c in _FEATURE_COLS]])
+            probs  = self._pipeline.predict_proba(row)[0]
+            classes = self._pipeline.named_steps["clf"].classes_
+            return {int(c): float(p) for c, p in zip(classes, probs)}
+        return _rule_based_proba(features)
+
     @property
     def is_trained(self) -> bool:
         return self._trained
 
 
 # ── Rule-based fallback ───────────────────────────────────────────────────────
+
+def _rule_based_proba(features: dict) -> dict[int, float]:
+    """
+    Convert the rule-based linear score to soft probability estimates using
+    a pair of logistic (sigmoid) functions.
+
+    A strongly positive score pushes p_bullish toward 1; strongly negative
+    pushes p_bearish toward 1; near-zero leaves neutral dominant.
+    """
+    import math
+
+    score = (
+        (features.get("level_ratio",  1.0) - 1.0) * 2.0
+        + features.get("slope_4w",     0.0)        * 3.0
+        + features.get("acceleration", 0.0)        * 1.5
+    )
+    p_bull = 1.0 / (1.0 + math.exp(-2.0 * score))
+    p_bear = 1.0 / (1.0 + math.exp( 2.0 * score))
+    p_neut = max(0.0, 1.0 - p_bull - p_bear)
+    total  = p_bull + p_bear + p_neut
+    return {
+         1: round(p_bull / total, 4),
+         0: round(p_neut / total, 4),
+        -1: round(p_bear / total, 4),
+    }
+
 
 def _rule_based_vote(features: dict) -> int:
     """

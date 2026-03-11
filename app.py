@@ -216,6 +216,34 @@ def fetch_trend_data(ticker: str) -> dict:
     }
 
 
+_MARKET_PROXIES = ["SPY", "QQQ", "IWM"]   # S&P 500 / Nasdaq-100 / Russell 2000
+
+
+@st.cache_data(ttl=21_600, show_spinner=False)   # 6-hour cache
+def fetch_market_trends() -> dict:
+    """
+    Fetch Google Trends + ML confidence for the three main US market ETFs
+    (SPY, QQQ, IWM) as a macro-level trend pulse. Cached 6 h.
+
+    Returns
+    -------
+    dict  ticker → {features, vote, proba, current_level, label}
+    """
+    result = {}
+    for ticker in _MARKET_PROXIES:
+        series   = fetch_trends(ticker)
+        features = compute_trend_features(series)
+        vote     = get_model().predict_vote(features)
+        proba    = get_model().predict_proba(features)
+        result[ticker] = {
+            "features":      features,
+            "vote":          vote,
+            "proba":         proba,
+            "current_level": features.get("current_level", 50.0),
+        }
+    return result
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock_detail(ticker: str) -> dict:
     """Full signal result + raw 10-min bars for a single ticker."""
@@ -449,7 +477,7 @@ with tab_overview:
     st.markdown("")
 
     # ── Charts ────────────────────────────────────────────────────────────
-    ch1, ch2 = st.columns(2)
+    ch1, ch2, ch3 = st.columns([5, 5, 4])
 
     with ch1:
         pie = px.pie(
@@ -500,6 +528,88 @@ with tab_overview:
             height=400,
         )
         st.plotly_chart(fig_net, use_container_width=True)
+
+    with ch3:
+        st.markdown(
+            f"<div style='font-size:15px; font-weight:800; color:{OSU_SCARLET}; "
+            "margin-bottom:12px;'>🤖 ML Signal Confidence</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Confidence bars derived from today's signal distribution ──────
+        total_stocks = max(n_buy + n_sell + n_hold, 1)
+        pct_buy  = n_buy  / total_stocks
+        pct_hold = n_hold / total_stocks
+        pct_sell = n_sell / total_stocks
+
+        def _conf_bar(label: str, pct: float, color: str) -> str:
+            bar_w = max(int(pct * 100), 2)
+            return (
+                f"<div style='margin-bottom:10px;'>"
+                f"<div style='display:flex; justify-content:space-between; "
+                f"font-size:12px; font-weight:600; margin-bottom:3px;'>"
+                f"<span>{label}</span><span style='color:{color};'>{pct*100:.0f}%</span></div>"
+                f"<div style='background:#eee; border-radius:4px; height:10px;'>"
+                f"<div style='background:{color}; width:{bar_w}%; height:10px; "
+                f"border-radius:4px;'></div></div></div>"
+            )
+
+        st.markdown(
+            "<div style='font-size:11px; color:#888; margin-bottom:8px;'>"
+            "Based on today's S&P 500 signal distribution</div>"
+            + _conf_bar("BUY",  pct_buy,  SIG_BUY_BG)
+            + _conf_bar("HOLD", pct_hold, SIG_HOLD_BG)
+            + _conf_bar("SELL", pct_sell, SIG_SELL_BG),
+            unsafe_allow_html=True,
+        )
+
+        # ── Market Trend Pulse (SPY / QQQ / IWM) ─────────────────────────
+        st.markdown(
+            f"<div style='font-size:13px; font-weight:700; color:{OSU_GRAY}; "
+            "margin-top:14px; margin-bottom:8px; border-top:1px solid #eee; "
+            "padding-top:10px;'>📡 Market Trend Pulse</div>"
+            "<div style='font-size:11px; color:#888; margin-bottom:10px;'>"
+            "Google Trends — top 3 US market ETFs</div>",
+            unsafe_allow_html=True,
+        )
+
+        with st.spinner("Loading market trends…"):
+            mkt_trends = fetch_market_trends()
+
+        _vote_icon  = {1: "↑", 0: "→", -1: "↓"}
+        _vote_color = {1: SIG_BUY_BG, 0: SIG_HOLD_BG, -1: SIG_SELL_BG}
+        _vote_word  = {1: "Bullish", 0: "Neutral", -1: "Bearish"}
+        _etf_name   = {"SPY": "S&P 500", "QQQ": "Nasdaq-100", "IWM": "Russell 2000"}
+
+        pulse_html = ""
+        for etf, data in mkt_trends.items():
+            vote   = data["vote"]
+            proba  = data["proba"]
+            level  = data["current_level"]
+            # Dominant confidence = probability of the predicted class
+            conf_pct = int(proba.get(vote, 0.5) * 100)
+            icon  = _vote_icon[vote]
+            color = _vote_color[vote]
+            word  = _vote_word[vote]
+            name  = _etf_name.get(etf, etf)
+            pulse_html += (
+                f"<div style='display:flex; align-items:center; justify-content:space-between; "
+                f"padding:7px 10px; margin-bottom:6px; border-radius:6px; background:#f8f8f8; "
+                f"border-left:3px solid {color};'>"
+                f"<div>"
+                f"<div style='font-weight:700; font-size:13px;'>{etf}"
+                f"<span style='font-weight:400; font-size:11px; color:#888; margin-left:5px;'>{name}</span></div>"
+                f"<div style='font-size:11px; color:#555;'>Interest: {level:.0f}/100"
+                f" &nbsp;·&nbsp; Confidence: {conf_pct}%</div>"
+                f"</div>"
+                f"<span style='background:{color}; color:white; font-size:12px; font-weight:700; "
+                f"padding:3px 8px; border-radius:4px; white-space:nowrap;'>"
+                f"{icon} {word}</span>"
+                f"</div>"
+            )
+
+        st.markdown(pulse_html, unsafe_allow_html=True)
+        st.caption("Confidence = ML model probability for the predicted class.")
 
     # ── Top movers ────────────────────────────────────────────────────────
     top_col, bot_col = st.columns(2)
