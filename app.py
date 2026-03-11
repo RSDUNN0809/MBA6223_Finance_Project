@@ -29,7 +29,14 @@ from src.data import (
 )
 from src.ml_model import get_model
 from src.signals import BUY, HOLD, SELL, assess_all, compute_signal
-from src.trends import compute_trend_features, fetch_trends, get_price_history_3m
+from src.trends import (
+    compute_trend_features,
+    fetch_query_interest,
+    fetch_top_trending_queries,
+    fetch_trends,
+    get_price_history_3m,
+    match_tickers_to_query,
+)
 from src.universe import get_sp500
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -241,6 +248,27 @@ def fetch_market_trends() -> dict:
             "proba":         proba,
             "current_level": features.get("current_level", 50.0),
         }
+    return result
+
+
+@st.cache_data(ttl=600, show_spinner=False)   # 10-minute cache — trending queries change slowly
+def fetch_trending_now(universe: pd.DataFrame, n: int = 3) -> list[dict]:
+    """
+    Fetch the top *n* US trending Google searches and enrich each with:
+    - weekly search-interest series (3 months)
+    - matched S&P 500 tickers (by company name / ticker substring)
+
+    Returns a list of dicts with keys:
+        query          : str
+        interest       : pd.Series | None
+        matched_tickers: list[str]
+    """
+    queries = fetch_top_trending_queries(n=n)
+    result  = []
+    for query in queries:
+        interest = fetch_query_interest(query)
+        matched  = match_tickers_to_query(query, universe)
+        result.append({"query": query, "interest": interest, "matched_tickers": matched})
     return result
 
 
@@ -659,6 +687,192 @@ with tab_overview:
                 use_container_width=True,
                 hide_index=True,
             )
+
+    # ── Google Trending Now ───────────────────────────────────────────────
+    st.markdown(
+        f"<div style='font-size:17px; font-weight:700; color:{OSU_SCARLET}; "
+        "margin-top:24px; margin-bottom:4px;'>🔥 Trending Now — Top 3 Google Searches</div>"
+        f"<div style='font-size:12px; color:{OSU_LIGHTGRAY}; margin-bottom:12px;'>"
+        "Real-time US Google trending queries · Matched to S&P 500 stocks · "
+        "Search interest vs. price movement overlay</div>",
+        unsafe_allow_html=True,
+    )
+
+    with st.spinner("Fetching real-time trending searches…"):
+        _universe_for_trends = get_sp500()
+        trending_now = fetch_trending_now(_universe_for_trends, n=3)
+
+    if not trending_now:
+        st.info(
+            "Trending search data is temporarily unavailable "
+            "(Google Trends rate-limit or network error). "
+            "Try refreshing in a moment.",
+            icon="📡",
+        )
+    else:
+        for _tidx, _trend in enumerate(trending_now):
+            _query   = _trend["query"]
+            _interest = _trend["interest"]
+            _matched  = _trend["matched_tickers"]
+
+            # ── Header row for this query ───────────────────────────────
+            _rank_emoji = ["1️⃣", "2️⃣", "3️⃣"][_tidx]
+            with st.expander(
+                f"{_rank_emoji}  **{_query}**"
+                + (f"  —  matched stocks: {', '.join(_matched)}" if _matched else "  —  no direct S&P 500 match"),
+                expanded=(_tidx == 0),
+            ):
+                _tcol_left, _tcol_right = st.columns([5, 4], gap="large")
+
+                # ── Left: interest + price overlay ─────────────────────
+                with _tcol_left:
+                    if _interest is not None and not _interest.empty:
+                        _fig_q = go.Figure()
+
+                        # Search interest fill
+                        _fig_q.add_trace(go.Scatter(
+                            x=_interest.index,
+                            y=_interest.values,
+                            name="Search Interest",
+                            fill="tozeroy",
+                            fillcolor="rgba(234, 67, 53, 0.12)",   # Google-red tint
+                            line=dict(color="rgba(234, 67, 53, 0.85)", width=2),
+                            mode="lines",
+                            yaxis="y1",
+                            hovertemplate="<b>%{x|%b %d %Y}</b><br>Interest: %{y:.0f}/100<extra></extra>",
+                        ))
+
+                        # Overlay closing prices for each matched ticker
+                        _price_colors = [OSU_SCARLET, "#1565C0", "#2e7d32", "#6a1b9a", "#e65100"]
+                        for _pi, _mticker in enumerate(_matched[:3]):
+                            _ph = get_price_history_3m(_mticker)
+                            if _ph is not None and not _ph.empty:
+                                if isinstance(_ph.columns, pd.MultiIndex):
+                                    _ph = _ph.copy()
+                                    _ph.columns = _ph.columns.get_level_values(0)
+                                if "Close" in _ph.columns:
+                                    _fig_q.add_trace(go.Scatter(
+                                        x=_ph.index,
+                                        y=_ph["Close"],
+                                        name=f"{_mticker} price",
+                                        line=dict(color=_price_colors[_pi], width=2, dash="solid"),
+                                        mode="lines",
+                                        yaxis="y2",
+                                        hovertemplate=f"<b>%{{x|%b %d %Y}}</b><br>{_mticker}: $%{{y:.2f}}<extra></extra>",
+                                    ))
+
+                        _fig_q.update_layout(
+                            title=f'<b>"{_query}"</b> — Search Interest vs. Price (3 months)',
+                            title_font=dict(size=13, color=OSU_GRAY),
+                            xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+                            yaxis=dict(
+                                title="Search Interest (0–100)",
+                                range=[0, 110],
+                                showgrid=True,
+                                gridcolor="#f0f0f0",
+                                tickfont=dict(color="rgba(234,67,53,0.9)"),
+                                titlefont=dict(color="rgba(234,67,53,0.9)"),
+                            ),
+                            yaxis2=dict(
+                                title="Price ($)",
+                                overlaying="y",
+                                side="right",
+                                showgrid=False,
+                                tickfont=dict(color=OSU_SCARLET),
+                                titlefont=dict(color=OSU_SCARLET),
+                            ),
+                            legend=dict(orientation="h", y=-0.22),
+                            height=340,
+                            plot_bgcolor="white",
+                            paper_bgcolor="white",
+                            hovermode="x unified",
+                            margin=dict(t=48, b=60),
+                        )
+                        st.plotly_chart(_fig_q, use_container_width=True)
+
+                        # Trend features
+                        _tfeats = compute_trend_features(_interest)
+                        _tf1, _tf2, _tf3 = st.columns(3)
+                        _tf1.metric(
+                            "Current Interest",
+                            f"{_tfeats['current_level']:.0f} / 100",
+                            help="Latest weekly search interest (0=low, 100=peak)",
+                        )
+                        _tf2.metric(
+                            "vs 3-Month Avg",
+                            f"{_tfeats['level_ratio']:.2f}×",
+                            delta=f"{(_tfeats['level_ratio'] - 1)*100:+.0f}%",
+                            help=">1× means above-average search interest",
+                        )
+                        _tf3.metric(
+                            "4-Week Slope",
+                            f"{_tfeats['slope_4w']:+.3f}",
+                            help="Positive = rising trend, negative = fading",
+                        )
+                    else:
+                        st.info(
+                            "Search-interest data for this query is unavailable "
+                            "(may be too new or rate-limited).",
+                            icon="📡",
+                        )
+
+                # ── Right: matched stock signals ───────────────────────
+                with _tcol_right:
+                    st.markdown(
+                        f"<div style='font-size:13px; font-weight:700; color:{OSU_GRAY}; "
+                        "margin-bottom:8px;'>📈 Related S&P 500 Stocks</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    if not _matched:
+                        st.markdown(
+                            f"<div style='font-size:13px; color:{OSU_LIGHTGRAY}; padding:8px 0;'>"
+                            "No direct ticker / company match found for this query. "
+                            "Search the <em>Individual Stock</em> tab to explore manually.</div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        _sig_bg = {BUY: SIG_BUY_BG, SELL: SIG_SELL_BG, HOLD: SIG_HOLD_BG}
+                        _sig_emoji = {BUY: "🟢", SELL: "🔴", HOLD: "🟡"}
+
+                        for _mt in _matched:
+                            _mrow = results_df[results_df["Ticker"] == _mt]
+                            if _mrow.empty:
+                                continue
+                            _mrow = _mrow.iloc[0]
+                            _msig  = _mrow["Signal"]
+                            _mscore = _mrow["Score"]
+                            _mmom  = _mrow.get("Momentum %")
+                            _mgap  = _mrow.get("Gap %")
+                            _mbg   = _sig_bg.get(_msig, OSU_GRAY)
+                            _memi  = _sig_emoji.get(_msig, "⚪")
+
+                            _mom_str = f"{_mmom:+.2f}%" if _mmom is not None and not (isinstance(_mmom, float) and pd.isna(_mmom)) else "—"
+                            _gap_str = f"{_mgap:+.2f}%" if _mgap is not None and not (isinstance(_mgap, float) and pd.isna(_mgap)) else "—"
+
+                            st.markdown(
+                                f"<div style='display:flex; align-items:center; justify-content:space-between; "
+                                f"padding:10px 14px; margin-bottom:8px; border-radius:8px; "
+                                f"background:white; border-left:4px solid {_mbg}; "
+                                f"box-shadow:0 1px 5px rgba(0,0,0,0.07);'>"
+                                f"  <div>"
+                                f"    <div style='font-size:15px; font-weight:700; color:{OSU_SCARLET};'>{_mt}</div>"
+                                f"    <div style='font-size:11px; color:{OSU_LIGHTGRAY};'>"
+                                f"      Gap {_gap_str} &nbsp;·&nbsp; 10-min {_mom_str}"
+                                f"    </div>"
+                                f"  </div>"
+                                f"  <div style='text-align:right;'>"
+                                f"    <div style='background:{_mbg}; color:white; font-size:12px; "
+                                f"         font-weight:700; padding:3px 10px; border-radius:5px;'>"
+                                f"      {_memi} {_msig}</div>"
+                                f"    <div style='font-size:11px; color:{OSU_LIGHTGRAY}; margin-top:2px;'>"
+                                f"      Score {_mscore:+d}</div>"
+                                f"  </div>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+
+    st.divider()
 
     # ── Score distribution ─────────────────────────────────────────────────
     with st.expander("Score distribution histogram", expanded=False):

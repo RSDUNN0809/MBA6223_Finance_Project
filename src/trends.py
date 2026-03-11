@@ -6,9 +6,12 @@ and derives normalised features consumed by the ML trend signal model.
 
 Public API
 ----------
-fetch_trends(ticker)         -> pd.Series | None   (weekly interest, 0-100)
-get_price_history_3m(ticker) -> pd.DataFrame | None (daily OHLCV, 3 months)
-compute_trend_features(series) -> dict              (level_ratio, slope_4w, …)
+fetch_trends(ticker)               -> pd.Series | None   (weekly interest, 0-100)
+get_price_history_3m(ticker)       -> pd.DataFrame | None (daily OHLCV, 3 months)
+compute_trend_features(series)     -> dict              (level_ratio, slope_4w, …)
+fetch_top_trending_queries(n)      -> list[str]         (top N US trending searches)
+fetch_query_interest(query)        -> pd.Series | None  (weekly interest for a query)
+match_tickers_to_query(query, universe) -> list[str]    (S&P 500 tickers related to query)
 """
 from __future__ import annotations
 
@@ -126,3 +129,101 @@ def compute_trend_features(series: Optional[pd.Series]) -> dict:
         "acceleration":  round(acceleration, 4),
         "current_level": round(current,      2),
     }
+
+
+# ── Real-time trending queries ─────────────────────────────────────────────────
+
+def fetch_top_trending_queries(n: int = 3) -> list[str]:
+    """
+    Fetch the top *n* currently trending Google search queries in the US.
+
+    Uses pytrends ``trending_searches``.  Returns a list of query strings;
+    returns an empty list on any failure (rate-limit, network, import error).
+    """
+    try:
+        from pytrends.request import TrendReq
+
+        pytrends = TrendReq(hl="en-US", tz=300)
+        df = pytrends.trending_searches(pn="united_states")
+
+        if df is None or df.empty:
+            _LOG.warning("trending_searches returned no data.")
+            return []
+
+        return df.iloc[:n, 0].tolist()
+
+    except ImportError:
+        _LOG.warning("pytrends not installed — trending queries unavailable.")
+        return []
+    except Exception as exc:
+        _LOG.warning("fetch_top_trending_queries failed: %s", exc)
+        return []
+
+
+def fetch_query_interest(query: str, timeframe: str = _TIMEFRAME) -> Optional[pd.Series]:
+    """
+    Fetch weekly Google Trends interest-over-time for an arbitrary search *query*.
+
+    Behaves identically to ``fetch_trends`` but accepts any string (not just a
+    ticker symbol).  Returns a Series indexed by date (values 0-100) or None.
+    """
+    try:
+        from pytrends.request import TrendReq
+
+        pytrends = TrendReq(hl="en-US", tz=300)
+        pytrends.build_payload([query], timeframe=timeframe, geo="US")
+        df = pytrends.interest_over_time()
+
+        if df is None or df.empty or query not in df.columns:
+            _LOG.warning("No Google Trends data for query '%s'.", query)
+            return None
+
+        series = df[query].astype(float)
+        if "isPartial" in df.columns:
+            series = series[~df["isPartial"]]
+
+        return series
+
+    except ImportError:
+        _LOG.warning("pytrends not installed — query interest unavailable.")
+        return None
+    except Exception as exc:
+        _LOG.warning("fetch_query_interest failed for '%s': %s", query, exc)
+        return None
+
+
+def match_tickers_to_query(query: str, universe: "pd.DataFrame") -> list[str]:
+    """
+    Return a list of S&P 500 tickers whose company name or ticker symbol appears
+    in *query* (case-insensitive substring match).
+
+    Parameters
+    ----------
+    query    : trending search string, e.g. "Apple earnings"
+    universe : DataFrame with columns ``ticker`` and ``company``
+
+    Returns at most 5 matches.
+    """
+    query_lower = query.lower()
+    matched: list[str] = []
+
+    for _, row in universe.iterrows():
+        ticker: str  = str(row.get("ticker", "")).lower()
+        company: str = str(row.get("company", "")).lower()
+
+        # Ticker match: whole-word check (avoids "AI" matching "RAIN" etc.)
+        if ticker and (
+            f" {ticker} " in f" {query_lower} "
+            or query_lower.startswith(ticker + " ")
+            or query_lower.endswith(" " + ticker)
+            or query_lower == ticker
+        ):
+            matched.append(str(row["ticker"]))
+            continue
+
+        # Company name: require the first word of the company to appear
+        first_word = company.split()[0] if company.split() else ""
+        if first_word and len(first_word) > 3 and first_word in query_lower:
+            matched.append(str(row["ticker"]))
+
+    return matched[:5]
