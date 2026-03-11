@@ -124,7 +124,7 @@ def _fisher_banner(subtitle: str = "") -> None:
     now_et = datetime.now(ET)
     mkt     = market_status()
     mkt_label = {"pre": "🟡 PRE-MARKET", "open": "🟢 MARKET OPEN", "closed": "🔴 MARKET CLOSED"}
-    st.markdown(
+    st.html(
         f"""
         <div style="
             background: linear-gradient(135deg, {OSU_SCARLET} 0%, #8B0000 100%);
@@ -137,7 +137,6 @@ def _fisher_banner(subtitle: str = "") -> None:
             gap: 24px;
             box-shadow: 0 4px 16px rgba(187,0,0,0.25);
         ">
-            <!-- Block-O wordmark -->
             <div style="
                 font-size: 52px;
                 font-weight: 900;
@@ -153,7 +152,6 @@ def _fisher_banner(subtitle: str = "") -> None:
                 flex-shrink: 0;
             ">O</div>
 
-            <!-- Text block -->
             <div style="flex:1;">
                 <div style="font-size:11px; letter-spacing:3px; opacity:0.85; text-transform:uppercase;">
                     The Ohio State University
@@ -163,14 +161,13 @@ def _fisher_banner(subtitle: str = "") -> None:
                 </div>
                 <div style="font-size:14px; opacity:0.85;">
                     MBA6223 &mdash; Morning 10-Minute Signal Dashboard
-                    {"&nbsp;·&nbsp;" + subtitle if subtitle else ""}
+                    {"&nbsp;&middot;&nbsp;" + subtitle if subtitle else ""}
                 </div>
             </div>
 
-            <!-- Market status + time -->
             <div style="text-align:right; flex-shrink:0;">
                 <div style="font-size:15px; font-weight:600;">
-                    {mkt_label.get(mkt, "⚪ UNKNOWN")}
+                    {mkt_label.get(mkt, "&#9898; UNKNOWN")}
                 </div>
                 <div style="font-size:13px; opacity:0.85; margin-top:4px;">
                     {now_et.strftime("%I:%M:%S %p ET")}
@@ -180,8 +177,7 @@ def _fisher_banner(subtitle: str = "") -> None:
                 </div>
             </div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
@@ -462,7 +458,7 @@ with tab_overview:
     n_hold  = int((results_df["Signal"] == HOLD).sum())
     n_total = len(results_df)
 
-    st.markdown(
+    st.html(
         f"""
         <div style="
             background: linear-gradient(135deg, {sentiment_color} 0%, {sentiment_color}cc 100%);
@@ -482,14 +478,13 @@ with tab_overview:
                 {sentiment_desc}
             </div>
             <div style="margin-top:16px; display:flex; gap:30px; font-size:14px; opacity:0.85;">
-                <span>🟢 <strong>{n_buy}</strong> BUY ({n_buy/n_total*100:.0f}%)</span>
-                <span>🔴 <strong>{n_sell}</strong> SELL ({n_sell/n_total*100:.0f}%)</span>
-                <span>🟡 <strong>{n_hold}</strong> HOLD ({n_hold/n_total*100:.0f}%)</span>
-                <span>📋 <strong>{n_total}</strong> total</span>
+                <span>&#128994; <strong>{n_buy}</strong> BUY ({n_buy/n_total*100:.0f}%)</span>
+                <span>&#128308; <strong>{n_sell}</strong> SELL ({n_sell/n_total*100:.0f}%)</span>
+                <span>&#128993; <strong>{n_hold}</strong> HOLD ({n_hold/n_total*100:.0f}%)</span>
+                <span>&#128203; <strong>{n_total}</strong> total</span>
             </div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     # ── Metrics row ────────────────────────────────────────────────────────
@@ -840,17 +835,21 @@ with tab_overview:
                             if _mrow.empty:
                                 continue
                             _mrow = _mrow.iloc[0]
-                            _msig  = _mrow["Signal"]
+                            _msig   = _mrow["Signal"]
                             _mscore = _mrow["Score"]
-                            _mmom  = _mrow.get("Momentum %")
-                            _mgap  = _mrow.get("Gap %")
-                            _mbg   = _sig_bg.get(_msig, OSU_GRAY)
-                            _memi  = _sig_emoji.get(_msig, "⚪")
+                            _mmom   = _mrow.get("Momentum %")
+                            _mgap   = _mrow.get("Gap %")
+                            _mbg    = _sig_bg.get(_msig, OSU_GRAY)
+                            _memi   = _sig_emoji.get(_msig, "⚪")
 
-                            _mom_str = f"{_mmom:+.2f}%" if _mmom is not None and not (isinstance(_mmom, float) and pd.isna(_mmom)) else "—"
-                            _gap_str = f"{_mgap:+.2f}%" if _mgap is not None and not (isinstance(_mgap, float) and pd.isna(_mgap)) else "—"
+                            _mom_str   = f"{_mmom:+.2f}%" if _mmom is not None and not (isinstance(_mmom, float) and pd.isna(_mmom)) else "—"
+                            _gap_str   = f"{_mgap:+.2f}%" if _mgap is not None and not (isinstance(_mgap, float) and pd.isna(_mgap)) else "—"
+                            try:
+                                _score_str = f"{int(_mscore):+d}"
+                            except (TypeError, ValueError):
+                                _score_str = "—"
 
-                            st.markdown(
+                            st.html(
                                 f"<div style='display:flex; align-items:center; justify-content:space-between; "
                                 f"padding:10px 14px; margin-bottom:8px; border-radius:8px; "
                                 f"background:white; border-left:4px solid {_mbg}; "
@@ -858,7 +857,7 @@ with tab_overview:
                                 f"  <div>"
                                 f"    <div style='font-size:15px; font-weight:700; color:{OSU_SCARLET};'>{_mt}</div>"
                                 f"    <div style='font-size:11px; color:{OSU_LIGHTGRAY};'>"
-                                f"      Gap {_gap_str} &nbsp;·&nbsp; 10-min {_mom_str}"
+                                f"      Gap {_gap_str} &nbsp;&middot;&nbsp; 10-min {_mom_str}"
                                 f"    </div>"
                                 f"  </div>"
                                 f"  <div style='text-align:right;'>"
@@ -866,10 +865,9 @@ with tab_overview:
                                 f"         font-weight:700; padding:3px 10px; border-radius:5px;'>"
                                 f"      {_memi} {_msig}</div>"
                                 f"    <div style='font-size:11px; color:{OSU_LIGHTGRAY}; margin-top:2px;'>"
-                                f"      Score {_mscore:+d}</div>"
+                                f"      Score {_score_str}</div>"
                                 f"  </div>"
-                                f"</div>",
-                                unsafe_allow_html=True,
+                                f"</div>"
                             )
 
     st.divider()
