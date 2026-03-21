@@ -1,0 +1,6 @@
+# AWS CDK v2 and construct libraries
+aws-cdk-lib>=2.130.0
+constructs>=10.3.0
+
+# CDK CLI (install globally or in venv)
+# aws-cdk.cli — install separately: npm install -g aws-cdk

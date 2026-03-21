@@ -1,0 +1,17 @@
+# Lambda Layer dependencies
+# Install with:
+#   pip install -r requirements.txt \
+#     -t infrastructure/lambda/layer/python/lib/python3.11/site-packages \
+#     --platform manylinux2014_aarch64 \
+#     --only-binary=:all:
+#
+# The src/ package is copied in by the Makefile (see infrastructure/Makefile).
+
+pandas>=2.1.0
+numpy>=1.26.0
+yfinance>=0.2.38
+pytz>=2024.1
+lxml>=5.1.0
+requests>=2.31.0
+pytrends>=4.9.0
+scikit-learn>=1.4.0
